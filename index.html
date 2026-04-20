@@ -177,31 +177,54 @@
         document.getElementById('data-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
-
+        
             const reader = new FileReader();
             reader.onload = function(event) {
                 const text = event.target.result;
-                logMsg(`Loaded file: ${file.name}.`);
+                // Split by whitespace (space, tab, newline) and filter out empty strings
+                const tokens = text.trim().split(/\s+/).map(Number);
+        
+                if (tokens.length < 2) {
+                    logMsg("Error: File is too short or invalid format.");
+                    return;
+                }
+        
+                let idx = 0;
+                // 1. Read maxC and numA
+                const fileMaxC = tokens[idx++];
+                const fileNumA = tokens[idx++];
+        
+                // Update UI fields so the user sees what was loaded
+                document.getElementById('max-c').value = fileMaxC;
+                document.getElementById('num-alphas').value = fileNumA;
+        
+                logMsg(`Loading data: maxC=${fileMaxC}, numA=${fileNumA}`);
+        
+                // 2. Read all Alphas (stored as alpha^2 in file, we take sqrt for the algorithm)
+                parsedAlphas = new Float64Array(fileNumA);
+                for (let i = 0; i < fileNumA; i++) {
+                    let alphaSq = tokens[idx++];
+                    parsedAlphas[i] = Math.sqrt(alphaSq); 
+                }
+        
+                // 3. Read Counts for each Alpha
+                // Expected structure: Alpha0_Counts[0...maxC], Alpha1_Counts[0...maxC]...
+                const totalCountElements = fileNumA * (fileMaxC + 1);
+                parsedCounts = new Float64Array(totalCountElements);
                 
-                let numA = parseInt(document.getElementById('num-alphas').value);
-                let maxC = parseInt(document.getElementById('max-c').value);
-                
-                parsedAlphas = new Float64Array(numA);
-                parsedCounts = new Float64Array(numA * (maxC + 1));
-
-                // MOCK PARSER: Replace with your actual file extraction logic.
-                for(let i=0; i<numA; i++) {
-                    parsedAlphas[i] = (i + 1) * 0.5; 
-                    for(let c=0; c<=maxC; c++) {
-                        // Generate mock data that looks roughly Poissonian for visualization test
-                        parsedCounts[i*(maxC+1) + c] = Math.abs(Math.sin(i + c) * 1000) + 50; 
+                for (let i = 0; i < totalCountElements; i++) {
+                    if (idx < tokens.length) {
+                        parsedCounts[i] = tokens[idx++];
+                    } else {
+                        logMsg("Warning: Reached end of file before filling counts matrix.");
+                        break;
                     }
                 }
+        
+                logMsg(`Successfully parsed ${fileNumA} alphas and ${totalCountElements} data points.`);
                 
-                logMsg("Data parsed successfully.");
-                
-                // Trigger the data plot immediately upon upload
-                plotExperimentalData(parsedAlphas, parsedCounts, numA, maxC);
+                // Update the plot immediately
+                plotExperimentalData(parsedAlphas, parsedCounts, fileNumA, fileMaxC);
             };
             reader.readAsText(file);
         });
