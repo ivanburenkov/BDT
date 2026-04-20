@@ -4655,7 +4655,7 @@ var dynCall_jiji = Module["dynCall_jiji"] = createExportWrapper("dynCall_jiji");
 
 unexportedRuntimeFunction('intArrayFromString', false);
 unexportedRuntimeFunction('intArrayToString', false);
-unexportedRuntimeFunction('ccall', false);
+Module["ccall"] = ccall;
 Module["cwrap"] = cwrap;
 unexportedRuntimeFunction('setValue', false);
 unexportedRuntimeFunction('getValue', false);
