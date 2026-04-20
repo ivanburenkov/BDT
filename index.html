@@ -287,7 +287,18 @@
             Plotly.newPlot('plotly-div', data, layout);
         }
 
-
+        function updatePlotly(flatPovmArray, maxN, maxC) {
+            let zData = [];
+            for (let c = 0; c <= maxC; c++) {
+                let row = [];
+                for (let n = 0; n <= maxN; n++) {
+                    row.push(flatPovmArray[n * (maxC + 1) + c]);
+                }
+                zData.push(row);
+            }
+            Plotly.update('plotly-div', { z: [zData] });
+        }
+        
         // --- Main Execution Loop ---
         btnStart.addEventListener('click', () => {
             if (!parsedAlphas || !parsedCounts) {
