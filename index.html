@@ -250,7 +250,9 @@
                 xaxis: { title: 'Input Photons (n)', tickmode: 'linear' },
                 yaxis: { title: 'Detector Clicks (c)', tickmode: 'linear' },
                 margin: { l: 60, r: 50, b: 50, t: 50 },
-                autosize: true
+                width: 10*maxN,  
+                height: 10*maxC,
+                autosize: false
             };
 
             Plotly.newPlot('plotly-div', data, layout);
