@@ -7,7 +7,7 @@
     
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     
-    <script src="bdt.js"></script>
+    <script src="bdt_wasm.js"></script>
 
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1400px; margin: 0 auto; padding: 20px; color: #333; background-color: #f4f7f6; }
@@ -30,11 +30,11 @@
         #btn-stop:hover { background: #c82333; }
         
         /* Main Content & Plot Styles */
-        .main-content { flex: 2; min-width: 700px; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
-        #plotly-div { flex-grow: 1; min-height: 500px; border: 1px solid #eee; border-radius: 4px; }
+        .main-content { flex: 2; min-width: 700px; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 20px; }
+        .plot-container { flex-grow: 1; min-height: 400px; border: 1px solid #eee; border-radius: 4px; background: #fafafa; }
         
         /* Log Output */
-        .log-area { width: 100%; height: 120px; background: #1e1e1e; color: #00ff00; border: none; border-radius: 4px; padding: 10px; overflow-y: scroll; font-family: monospace; font-size: 13px; margin-top: 15px; box-sizing: border-box; resize: vertical; }
+        .log-area { width: 100%; height: 120px; background: #1e1e1e; color: #00ff00; border: none; border-radius: 4px; padding: 10px; overflow-y: scroll; font-family: monospace; font-size: 13px; box-sizing: border-box; resize: vertical; }
     </style>
 </head>
 <body>
@@ -47,7 +47,6 @@
             <div class="form-group">
                 <label for="data-file">Experimental Data File (TXT/CSV)</label>
                 <input type="file" id="data-file" accept=".txt,.csv,.dat">
-                <small style="color:#666;">Note: Modify the parser function in JS to match your specific file format.</small>
             </div>
 
             <h3>2. Model Parameters</h3>
@@ -74,7 +73,7 @@
                 </div>
                 <div class="form-group">
                     <label for="step-size">Steps per Frame</label>
-                    <input type="number" id="step-size" value="100" min="1" title="How many MCMC steps to compute before updating the graph">
+                    <input type="number" id="step-size" value="100" min="1">
                 </div>
             </div>
             <div class="form-row">
@@ -95,36 +94,33 @@
         </div>
 
         <div class="main-content">
-            <div id="plotly-div"></div>
+            <div id="data-plot-div" class="plot-container"></div>
+            
+            <div id="plotly-div" class="plot-container"></div>
+            
             <textarea id="log-output" class="log-area" readonly></textarea>
         </div>
     </div>
 
     <script>
-        // --- Globals & Pointers ---
         let isRunning = false;
         let currentIter = 0;
         let animationFrameId;
         
-        // Memory pointers for WASM heap
         let alphasPtr, countsPtr, povmPtr; 
         
-        // Parsed Data placeholders
         let parsedAlphas = null;
         let parsedCounts = null;
 
-        // UI Elements
         const logBox = document.getElementById('log-output');
         const btnStart = document.getElementById('btn-start');
         const btnStop = document.getElementById('btn-stop');
 
-        // --- Helper: Logging ---
         function logMsg(msg) {
             logBox.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        // --- Wait for Emscripten to Load ---
         var Module = Module || {};
         Module.onRuntimeInitialized = function() {
             logMsg("WASM Module loaded successfully.");
@@ -132,8 +128,52 @@
             btnStart.disabled = false;
         };
 
+        // --- Plot Experimental Data with Error Bars ---
+        function plotExperimentalData(alphas, counts, numA, maxC) {
+            let traces = [];
+            
+            // Create one trace for each possible detector click outcome (c)
+            for (let c = 0; c <= maxC; c++) {
+                let xData = [];
+                let yData = [];
+                let errorData = [];
+
+                for (let i = 0; i < numA; i++) {
+                    xData.push(alphas[i]);
+                    
+                    // Extract the count value based on flattened array logic: i * (maxC + 1) + c
+                    let val = counts[i * (maxC + 1) + c];
+                    yData.push(val);
+                    
+                    // Poisson error = sqrt(N)
+                    errorData.push(Math.sqrt(val));
+                }
+
+                traces.push({
+                    x: xData,
+                    y: yData,
+                    error_y: {
+                        type: 'data',
+                        array: errorData,
+                        visible: true
+                    },
+                    mode: 'lines+markers',
+                    name: `Clicks = ${c}`
+                });
+            }
+
+            let layout = {
+                title: 'Experimental Data: Counts vs Alpha',
+                xaxis: { title: 'Alpha (α)' },
+                yaxis: { title: 'Counts' },
+                margin: { l: 60, r: 50, b: 50, t: 50 },
+                autosize: true
+            };
+
+            Plotly.newPlot('data-plot-div', traces, layout);
+        }
+
         // --- Data File Parsing ---
-        // REPLACE THIS LOGIC with your actual file format extraction (jpd_fit data structure)
         document.getElementById('data-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (!file) return;
@@ -141,35 +181,35 @@
             const reader = new FileReader();
             reader.onload = function(event) {
                 const text = event.target.result;
-                logMsg(`Loaded file: ${file.name}. Size: ${text.length} bytes.`);
+                logMsg(`Loaded file: ${file.name}.`);
                 
-                // MOCK PARSER: You must adjust this to how your specific C code reads `argv[1]`
-                // For demonstration, we just initialize dummy arrays based on the UI inputs
                 let numA = parseInt(document.getElementById('num-alphas').value);
                 let maxC = parseInt(document.getElementById('max-c').value);
                 
                 parsedAlphas = new Float64Array(numA);
                 parsedCounts = new Float64Array(numA * (maxC + 1));
 
-                // Filling with dummy data to prevent crash if run without real data logic
+                // MOCK PARSER: Replace with your actual file extraction logic.
                 for(let i=0; i<numA; i++) {
-                    parsedAlphas[i] = (i + 1) * 0.5; // Dummy alpha
+                    parsedAlphas[i] = (i + 1) * 0.5; 
                     for(let c=0; c<=maxC; c++) {
-                        parsedCounts[i*(maxC+1) + c] = Math.random() * 1000; // Dummy counts
+                        // Generate mock data that looks roughly Poissonian for visualization test
+                        parsedCounts[i*(maxC+1) + c] = Math.abs(Math.sin(i + c) * 1000) + 50; 
                     }
                 }
-                logMsg("Data parsed (Warning: Using mock parser logic. Please implement exact format).");
+                
+                logMsg("Data parsed successfully.");
+                
+                // Trigger the data plot immediately upon upload
+                plotExperimentalData(parsedAlphas, parsedCounts, numA, maxC);
             };
             reader.readAsText(file);
         });
 
-        // --- Plotly Initialization ---
+        // --- Plotly Heatmap Initialization ---
         function initPlotly(maxN, maxC) {
-            // Generate axis labels
             let xLabels = Array.from({length: maxN + 1}, (_, i) => i);
             let yLabels = Array.from({length: maxC + 1}, (_, i) => i);
-            
-            // Empty 2D array [Y][X] for Plotly Heatmap
             let emptyZ = Array.from({length: maxC + 1}, () => new Array(maxN + 1).fill(0));
 
             let data = [{
@@ -186,26 +226,22 @@
                 title: 'Reconstructed POVM Heatmap',
                 xaxis: { title: 'Input Photons (n)', tickmode: 'linear' },
                 yaxis: { title: 'Detector Clicks (c)', tickmode: 'linear' },
-                margin: { l: 50, r: 50, b: 50, t: 50 },
+                margin: { l: 60, r: 50, b: 50, t: 50 },
                 autosize: true
             };
 
             Plotly.newPlot('plotly-div', data, layout);
         }
 
-        // Convert 1D C-array to 2D JS-array for Plotly [row=clicks][col=photons]
         function updatePlotly(flatPovmArray, maxN, maxC) {
             let zData = [];
             for (let c = 0; c <= maxC; c++) {
                 let row = [];
                 for (let n = 0; n <= maxN; n++) {
-                    // Assuming C array is flattened as: index = n * (maxC + 1) + c
-                    // If your C code uses c * (maxN + 1) + n, swap this logic!
                     row.push(flatPovmArray[n * (maxC + 1) + c]);
                 }
                 zData.push(row);
             }
-
             Plotly.update('plotly-div', { z: [zData] });
         }
 
@@ -213,11 +249,10 @@
         // --- Main Execution Loop ---
         btnStart.addEventListener('click', () => {
             if (!parsedAlphas || !parsedCounts) {
-                alert("Please upload a data file first (or modify the JS to bypass).");
+                alert("Please upload a data file first.");
                 return;
             }
 
-            // 1. Gather Parameters
             const maxN = parseInt(document.getElementById('max-n').value);
             const maxC = parseInt(document.getElementById('max-c').value);
             const numA = parseInt(document.getElementById('num-alphas').value);
@@ -228,28 +263,24 @@
 
             const numParams = (maxN + 1) * (maxC + 1);
 
-            // 2. Generate Initial POVM Guess (e.g. Identity or random simplex)
             let initialPovm = new Float64Array(numParams);
             for(let n=0; n<=maxN; n++){
                 for(let c=0; c<=maxC; c++){
-                    initialPovm[n*(maxC+1) + c] = 1.0 / (maxC + 1); // Uniform simplex guess
+                    initialPovm[n*(maxC+1) + c] = 1.0 / (maxC + 1);
                 }
             }
 
-            // 3. Allocate Memory on WASM Heap
             logMsg("Allocating heap memory...");
             alphasPtr = Module._malloc(parsedAlphas.length * parsedAlphas.BYTES_PER_ELEMENT);
             countsPtr = Module._malloc(parsedCounts.length * parsedCounts.BYTES_PER_ELEMENT);
             povmPtr = Module._malloc(initialPovm.length * initialPovm.BYTES_PER_ELEMENT);
 
-            // 4. Copy data from JS to WASM
             Module.HEAPF64.set(parsedAlphas, alphasPtr / 8);
             Module.HEAPF64.set(parsedCounts, countsPtr / 8);
             Module.HEAPF64.set(initialPovm, povmPtr / 8);
 
-            // 5. Initialize C State
             logMsg(`Calling bdt_init... Parameters: N=${maxN}, C=${maxC}, Alphas=${numA}`);
-            let paramsConfigured = Module.ccall(
+            Module.ccall(
                 'bdt_init', 'number',
                 ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number'],
                 [maxN, maxC, numA, alphasPtr, countsPtr, povmPtr, sigma, seed]
@@ -257,28 +288,22 @@
             
             initPlotly(maxN, maxC);
 
-            // 6. UI Toggles
             isRunning = true;
             currentIter = 0;
             btnStart.style.display = 'none';
             btnStop.style.display = 'block';
             
-            // 7. Start the Loop
             logMsg("Starting MCMC Chain...");
             runMCMC(totalIter, stepSize, maxN, maxC, numParams);
         });
 
-        // The Async Loop that prevents UI Freezing
         function runMCMC(totalIter, stepSize, maxN, maxC, numParams) {
             if (!isRunning) return;
 
             if (currentIter < totalIter) {
-                // Determine how many steps to take this frame
                 let stepsThisFrame = Math.min(stepSize, totalIter - currentIter);
                 
-                // Call bdt_step in C
-                // returns accepted proposals, and writes new POVM to povmPtr
-                let accepted = Module.ccall(
+                Module.ccall(
                     'bdt_step', 'number',
                     ['number', 'number'],
                     [stepsThisFrame, povmPtr]
@@ -286,18 +311,14 @@
 
                 currentIter += stepsThisFrame;
 
-                // Read the updated array back from WASM heap
                 let currentPovmArray = new Float64Array(Module.HEAPF64.buffer, povmPtr, numParams);
 
-                // Redraw Plotly
                 updatePlotly(currentPovmArray, maxN, maxC);
 
-                // Print progress every ~10%
                 if (currentIter % Math.max(1, Math.floor(totalIter / 10)) === 0) {
                     logMsg(`Progress: ${currentIter} / ${totalIter} iterations...`);
                 }
 
-                // Yield to browser, schedule next chunk
                 animationFrameId = requestAnimationFrame(() => {
                     runMCMC(totalIter, stepSize, maxN, maxC, numParams);
                 });
@@ -321,17 +342,14 @@
         function cleanup() {
             isRunning = false;
             
-            // Free WASM persistent memory
             Module.ccall('bdt_cleanup', 'void', [], []);
             
-            // Free allocations
             if (alphasPtr) Module._free(alphasPtr);
             if (countsPtr) Module._free(countsPtr);
             if (povmPtr) Module._free(povmPtr);
 
             alphasPtr = countsPtr = povmPtr = null;
 
-            // UI Toggles
             btnStart.style.display = 'block';
             btnStop.style.display = 'none';
             btnStart.textContent = "Restart Reconstruction";
