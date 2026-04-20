@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bayesian Detector Tomography (BDT) Reconstruction</title>
+    
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    
+    <script src="bdt.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1400px; margin: 0 auto; padding: 20px; color: #333; background-color: #f4f7f6; }
+        h1 { border-bottom: 2px solid #0056b3; padding-bottom: 10px; color: #0056b3; }
+        .container { display: flex; flex-wrap: wrap; gap: 20px; margin-top: 20px; }
+        
+        /* Control Panel Styles */
+        .sidebar { flex: 1; min-width: 320px; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        .form-row { display: flex; gap: 10px; }
+        .form-row .form-group { flex: 1; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; font-size: 14px; }
+        input[type="number"], input[type="file"], input[type="text"] { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        
+        /* Button Styles */
+        button { background: #0056b3; color: white; border: none; padding: 12px 15px; cursor: pointer; border-radius: 4px; font-size: 16px; width: 100%; margin-bottom: 10px; font-weight: bold; transition: background 0.2s; }
+        button:hover { background: #004494; }
+        button:disabled { background: #cccccc; cursor: not-allowed; }
+        #btn-stop { background: #dc3545; display: none; }
+        #btn-stop:hover { background: #c82333; }
+        
+        /* Main Content & Plot Styles */
+        .main-content { flex: 2; min-width: 700px; background: #fff; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
+        #plotly-div { flex-grow: 1; min-height: 500px; border: 1px solid #eee; border-radius: 4px; }
+        
+        /* Log Output */
+        .log-area { width: 100%; height: 120px; background: #1e1e1e; color: #00ff00; border: none; border-radius: 4px; padding: 10px; overflow-y: scroll; font-family: monospace; font-size: 13px; margin-top: 15px; box-sizing: border-box; resize: vertical; }
+    </style>
+</head>
+<body>
+
+    <h1>BDT POVM Reconstruction Interface</h1>
+
+    <div class="container">
+        <div class="sidebar">
+            <h3>1. Upload Data</h3>
+            <div class="form-group">
+                <label for="data-file">Experimental Data File (TXT/CSV)</label>
+                <input type="file" id="data-file" accept=".txt,.csv,.dat">
+                <small style="color:#666;">Note: Modify the parser function in JS to match your specific file format.</small>
+            </div>
+
+            <h3>2. Model Parameters</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="max-n">Max Photons (N)</label>
+                    <input type="number" id="max-n" value="20" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="max-c">Max Clicks (C)</label>
+                    <input type="number" id="max-c" value="8" min="1">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="num-alphas">Number of Alphas</label>
+                <input type="number" id="num-alphas" value="10" min="1">
+            </div>
+
+            <h3>3. MCMC Settings</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="total-iter">Total Iterations</label>
+                    <input type="number" id="total-iter" value="10000" min="1000">
+                </div>
+                <div class="form-group">
+                    <label for="step-size">Steps per Frame</label>
+                    <input type="number" id="step-size" value="100" min="1" title="How many MCMC steps to compute before updating the graph">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label for="sigma">Proposal Sigma</label>
+                    <input type="number" id="sigma" value="0.01" step="0.001">
+                </div>
+                <div class="form-group">
+                    <label for="seed">RNG Seed</label>
+                    <input type="number" id="seed" value="1234">
+                </div>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid #ddd; margin: 20px 0;">
+
+            <button id="btn-start" disabled>Waiting for WASM...</button>
+            <button id="btn-stop">Stop / Cancel</button>
+        </div>
+
+        <div class="main-content">
+            <div id="plotly-div"></div>
+            <textarea id="log-output" class="log-area" readonly></textarea>
+        </div>
+    </div>
+
+    <script>
+        // --- Globals & Pointers ---
+        let isRunning = false;
+        let currentIter = 0;
+        let animationFrameId;
+        
+        // Memory pointers for WASM heap
+        let alphasPtr, countsPtr, povmPtr; 
+        
+        // Parsed Data placeholders
+        let parsedAlphas = null;
+        let parsedCounts = null;
+
+        // UI Elements
+        const logBox = document.getElementById('log-output');
+        const btnStart = document.getElementById('btn-start');
+        const btnStop = document.getElementById('btn-stop');
+
+        // --- Helper: Logging ---
+        function logMsg(msg) {
+            logBox.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        // --- Wait for Emscripten to Load ---
+        var Module = Module || {};
+        Module.onRuntimeInitialized = function() {
+            logMsg("WASM Module loaded successfully.");
+            btnStart.textContent = "Start Reconstruction";
+            btnStart.disabled = false;
+        };
+
+        // --- Data File Parsing ---
+        // REPLACE THIS LOGIC with your actual file format extraction (jpd_fit data structure)
+        document.getElementById('data-file').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const text = event.target.result;
+                logMsg(`Loaded file: ${file.name}. Size: ${text.length} bytes.`);
+                
+                // MOCK PARSER: You must adjust this to how your specific C code reads `argv[1]`
+                // For demonstration, we just initialize dummy arrays based on the UI inputs
+                let numA = parseInt(document.getElementById('num-alphas').value);
+                let maxC = parseInt(document.getElementById('max-c').value);
+                
+                parsedAlphas = new Float64Array(numA);
+                parsedCounts = new Float64Array(numA * (maxC + 1));
+
+                // Filling with dummy data to prevent crash if run without real data logic
+                for(let i=0; i<numA; i++) {
+                    parsedAlphas[i] = (i + 1) * 0.5; // Dummy alpha
+                    for(let c=0; c<=maxC; c++) {
+                        parsedCounts[i*(maxC+1) + c] = Math.random() * 1000; // Dummy counts
+                    }
+                }
+                logMsg("Data parsed (Warning: Using mock parser logic. Please implement exact format).");
+            };
+            reader.readAsText(file);
+        });
+
+        // --- Plotly Initialization ---
+        function initPlotly(maxN, maxC) {
+            // Generate axis labels
+            let xLabels = Array.from({length: maxN + 1}, (_, i) => i);
+            let yLabels = Array.from({length: maxC + 1}, (_, i) => i);
+            
+            // Empty 2D array [Y][X] for Plotly Heatmap
+            let emptyZ = Array.from({length: maxC + 1}, () => new Array(maxN + 1).fill(0));
+
+            let data = [{
+                z: emptyZ,
+                x: xLabels,
+                y: yLabels,
+                type: 'heatmap',
+                colorscale: 'Viridis',
+                zmin: 0.0,
+                zmax: 1.0
+            }];
+
+            let layout = {
+                title: 'Reconstructed POVM Heatmap',
+                xaxis: { title: 'Input Photons (n)', tickmode: 'linear' },
+                yaxis: { title: 'Detector Clicks (c)', tickmode: 'linear' },
+                margin: { l: 50, r: 50, b: 50, t: 50 },
+                autosize: true
+            };
+
+            Plotly.newPlot('plotly-div', data, layout);
+        }
+
+        // Convert 1D C-array to 2D JS-array for Plotly [row=clicks][col=photons]
+        function updatePlotly(flatPovmArray, maxN, maxC) {
+            let zData = [];
+            for (let c = 0; c <= maxC; c++) {
+                let row = [];
+                for (let n = 0; n <= maxN; n++) {
+                    // Assuming C array is flattened as: index = n * (maxC + 1) + c
+                    // If your C code uses c * (maxN + 1) + n, swap this logic!
+                    row.push(flatPovmArray[n * (maxC + 1) + c]);
+                }
+                zData.push(row);
+            }
+
+            Plotly.update('plotly-div', { z: [zData] });
+        }
+
+
+        // --- Main Execution Loop ---
+        btnStart.addEventListener('click', () => {
+            if (!parsedAlphas || !parsedCounts) {
+                alert("Please upload a data file first (or modify the JS to bypass).");
+                return;
+            }
+
+            // 1. Gather Parameters
+            const maxN = parseInt(document.getElementById('max-n').value);
+            const maxC = parseInt(document.getElementById('max-c').value);
+            const numA = parseInt(document.getElementById('num-alphas').value);
+            const totalIter = parseInt(document.getElementById('total-iter').value);
+            const stepSize = parseInt(document.getElementById('step-size').value);
+            const sigma = parseFloat(document.getElementById('sigma').value);
+            const seed = parseInt(document.getElementById('seed').value);
+
+            const numParams = (maxN + 1) * (maxC + 1);
+
+            // 2. Generate Initial POVM Guess (e.g. Identity or random simplex)
+            let initialPovm = new Float64Array(numParams);
+            for(let n=0; n<=maxN; n++){
+                for(let c=0; c<=maxC; c++){
+                    initialPovm[n*(maxC+1) + c] = 1.0 / (maxC + 1); // Uniform simplex guess
+                }
+            }
+
+            // 3. Allocate Memory on WASM Heap
+            logMsg("Allocating heap memory...");
+            alphasPtr = Module._malloc(parsedAlphas.length * parsedAlphas.BYTES_PER_ELEMENT);
+            countsPtr = Module._malloc(parsedCounts.length * parsedCounts.BYTES_PER_ELEMENT);
+            povmPtr = Module._malloc(initialPovm.length * initialPovm.BYTES_PER_ELEMENT);
+
+            // 4. Copy data from JS to WASM
+            Module.HEAPF64.set(parsedAlphas, alphasPtr / 8);
+            Module.HEAPF64.set(parsedCounts, countsPtr / 8);
+            Module.HEAPF64.set(initialPovm, povmPtr / 8);
+
+            // 5. Initialize C State
+            logMsg(`Calling bdt_init... Parameters: N=${maxN}, C=${maxC}, Alphas=${numA}`);
+            let paramsConfigured = Module.ccall(
+                'bdt_init', 'number',
+                ['number', 'number', 'number', 'number', 'number', 'number', 'number', 'number'],
+                [maxN, maxC, numA, alphasPtr, countsPtr, povmPtr, sigma, seed]
+            );
+            
+            initPlotly(maxN, maxC);
+
+            // 6. UI Toggles
+            isRunning = true;
+            currentIter = 0;
+            btnStart.style.display = 'none';
+            btnStop.style.display = 'block';
+            
+            // 7. Start the Loop
+            logMsg("Starting MCMC Chain...");
+            runMCMC(totalIter, stepSize, maxN, maxC, numParams);
+        });
+
+        // The Async Loop that prevents UI Freezing
+        function runMCMC(totalIter, stepSize, maxN, maxC, numParams) {
+            if (!isRunning) return;
+
+            if (currentIter < totalIter) {
+                // Determine how many steps to take this frame
+                let stepsThisFrame = Math.min(stepSize, totalIter - currentIter);
+                
+                // Call bdt_step in C
+                // returns accepted proposals, and writes new POVM to povmPtr
+                let accepted = Module.ccall(
+                    'bdt_step', 'number',
+                    ['number', 'number'],
+                    [stepsThisFrame, povmPtr]
+                );
+
+                currentIter += stepsThisFrame;
+
+                // Read the updated array back from WASM heap
+                let currentPovmArray = new Float64Array(Module.HEAPF64.buffer, povmPtr, numParams);
+
+                // Redraw Plotly
+                updatePlotly(currentPovmArray, maxN, maxC);
+
+                // Print progress every ~10%
+                if (currentIter % Math.max(1, Math.floor(totalIter / 10)) === 0) {
+                    logMsg(`Progress: ${currentIter} / ${totalIter} iterations...`);
+                }
+
+                // Yield to browser, schedule next chunk
+                animationFrameId = requestAnimationFrame(() => {
+                    runMCMC(totalIter, stepSize, maxN, maxC, numParams);
+                });
+
+            } else {
+                finishMCMC();
+            }
+        }
+
+        function finishMCMC() {
+            logMsg(`MCMC Complete! 100% finished.`);
+            cleanup();
+        }
+
+        btnStop.addEventListener('click', () => {
+            logMsg("User aborted MCMC run.");
+            cancelAnimationFrame(animationFrameId);
+            cleanup();
+        });
+
+        function cleanup() {
+            isRunning = false;
+            
+            // Free WASM persistent memory
+            Module.ccall('bdt_cleanup', 'void', [], []);
+            
+            // Free allocations
+            if (alphasPtr) Module._free(alphasPtr);
+            if (countsPtr) Module._free(countsPtr);
+            if (povmPtr) Module._free(povmPtr);
+
+            alphasPtr = countsPtr = povmPtr = null;
+
+            // UI Toggles
+            btnStart.style.display = 'block';
+            btnStop.style.display = 'none';
+            btnStart.textContent = "Restart Reconstruction";
+        }
+    </script>
+</body>
+</html>
