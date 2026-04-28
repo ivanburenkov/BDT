@@ -167,6 +167,38 @@
         }
 
         function initMSEPlot() {
+            const container = document.getElementById('mse-plot-div');
+            
+            // Check if it's already a plotly plot; if so, purge it to start fresh
+            if (container.data) {
+                Plotly.purge(container);
+            }
+        
+            const data = [{
+                x: [0], // Initial point
+                y: [1], // Initial high MSE
+                mode: 'lines+markers',
+                name: 'MSE',
+                line: { color: 'red', width: 2 },
+                marker: { size: 4 }
+            }];
+        
+            const layout = {
+                title: 'Convergence (Log-MSE)',
+                xaxis: { title: 'Iteration' },
+                yaxis: { 
+                    title: 'Mean Squared Error', 
+                    type: 'log', 
+                    autorange: true 
+                },
+                margin: { l: 60, r: 20, b: 40, t: 40 },
+                height: 300
+            };
+        
+            Plotly.newPlot('mse-plot-div', data, layout);
+        }
+        
+        /*function initMSEPlot() {
             Plotly.newPlot('mse-plot-div', [{
                 x: [], y: [], mode: 'lines', name: 'MSE', line: {color: 'red'}
             }], {
@@ -174,7 +206,8 @@
                 xaxis: { title: 'Iteration' },
                 yaxis: { title: 'Mean Squared Error', type: 'log' }
             });
-        }
+        }*/
+        
         // --- Plot Experimental Data with Error Bars ---
         function plotExperimentalData(alphas, counts, numA, maxC) {
             let traces = [];
@@ -420,7 +453,7 @@
             );
             
             initPlotly(maxN, maxC);
-
+            initMSEPlot();
             isRunning = true;
             currentIter = 0;
             btnStart.style.display = 'none';
