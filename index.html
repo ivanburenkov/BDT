@@ -177,6 +177,49 @@
         function plotExperimentalData(alphas, counts, numA, maxC) {
             let traces = [];
             
+            // --- Existing Experimental Traces (Points) ---
+            for (let c = 0; c <= maxC; c++) {
+                let xData = [], yData = [], errorData = [];
+                for (let i = 0; i < numA; i++) {
+                    let val = counts[i * (maxC + 1) + c];
+                    xData.push(alphas[i] * alphas[i]); // Plot vs Alpha^2
+                    yData.push(val);
+                    errorData.push(Math.sqrt(val));
+                }
+                traces.push({
+                    x: xData, y: yData,
+                    error_y: { type: 'data', array: errorData, visible: true },
+                    mode: 'markers', name: `Exp c=${c}`, marker: { size: 6 }
+                });
+            }
+        
+            // --- NEW: Empty Model Traces (Lines) ---
+            for (let c = 0; c <= maxC; c++) {
+                let xData = [];
+                for (let i = 0; i < numA; i++) xData.push(alphas[i] * alphas[i]);
+                traces.push({
+                    x: xData,
+                    y: new Array(numA).fill(0), // Start at zero
+                    mode: 'lines',
+                    name: `Model c=${c}`,
+                    line: { dash: 'dot', width: 2 },
+                    hoverinfo: 'skip'
+                });
+            }
+        
+            let layout = {
+                title: 'Data Fit: Exp (Points) vs Model (Lines)',
+                xaxis: { title: 'Mean Photon Number (α²)' },
+                yaxis: { title: 'Counts' },
+                margin: { l: 60, r: 50, b: 50, t: 50 }
+            };
+        
+            Plotly.newPlot('data-plot-div', traces, layout);
+        }
+        
+        /*function plotExperimentalData(alphas, counts, numA, maxC) {
+            let traces = [];
+            
             // Create one trace for each possible detector click outcome (c)
             for (let c = 0; c <= maxC; c++) {
                 let xData = [];
@@ -216,7 +259,7 @@
             };
 
             Plotly.newPlot('data-plot-div', traces, layout);
-        }
+        }*/
 
         // --- Data File Parsing ---
         document.getElementById('data-file').addEventListener('change', function(e) {
@@ -391,37 +434,53 @@
             if (currentIter < totalIter) {
                 let stepsThisFrame = Math.min(stepSize, totalIter - currentIter);
                 
+                // 1. Execute MCMC Step in WASM
                 Module.ccall('bdt_step', 'number', ['number', 'number'], [stepsThisFrame, povmPtr]);
                 currentIter += stepsThisFrame;
         
+                // 2. Extract current POVM from WASM Heap
                 let currentPovm = new Float64Array(Module.HEAPF64.buffer, povmPtr, numParams);
                 
-                // 1. Update Heatmap
-                updatePlotly(currentPovm, maxN, maxC);
-        
-                // 2. Calculate Model and MSE
-                let expected = calculateExpectedCounts(currentPovm, parsedAlphas, maxN, maxC, parsedAlphas.length);
+                // 3. Calculate Model Distribution P = F * Pi
+                const numA = parsedAlphas.length;
+                let expectedProbs = calculateExpectedCounts(currentPovm, parsedAlphas, maxN, maxC, numA);
+                
                 let mse = 0;
-                for(let i=0; i<expected.length; i++) {
-                    // Normalize expected to total counts if necessary
-                    let diff = expected[i] - (parsedCounts[i] / totalCountsPerAlpha); 
-                    mse += diff * diff;
-                }
-                mse /= expected.length;
+                let modelYData = []; // To store scaled values for plotting
+                
+                // Initialize modelYData nested arrays (one for each click trace)
+                for (let c = 0; c <= maxC; c++) modelYData[c] = [];
         
-                // 3. Update Experimental Plot (Adding 'Model' lines)
-                // We update the 'y' data of the traces assigned to the model
-                let modelYData = []; 
-                for(let c=0; c<=maxC; c++) {
-                    let traceY = [];
-                    for(let i=0; i<parsedAlphas.length; i++) traceY.push(expected[i * (maxC + 1) + c] * totalCountsPerAlpha);
-                    modelYData.push(traceY);
-                }
-                // Indices 0 to maxC are experimental, maxC+1 to 2*maxC+1 are model
-                let modelIndices = Array.from({length: maxC + 1}, (_, i) => i + maxC + 1);
-                Plotly.restyle('data-plot-div', { y: modelYData }, modelIndices);
+                // 4. Normalize and calculate MSE
+                for (let i = 0; i < numA; i++) {
+                    // Find total counts for this specific alpha intensity
+                    let totalForThisAlpha = 0;
+                    for (let c = 0; c <= maxC; c++) {
+                        totalForThisAlpha += parsedCounts[i * (maxC + 1) + c];
+                    }
         
-                // 4. Update Convergence Plot
+                    for (let c = 0; c <= maxC; c++) {
+                        let expCount = parsedCounts[i * (maxC + 1) + c];
+                        let expProb = totalForThisAlpha > 0 ? expCount / totalForThisAlpha : 0;
+                        let modelProb = expectedProbs[i * (maxC + 1) + c];
+                        
+                        // Add to MSE
+                        mse += Math.pow(expProb - modelProb, 2);
+                        
+                        // Scale model back to raw count units for the plot
+                        modelYData[c].push(modelProb * totalForThisAlpha);
+                    }
+                }
+                mse /= (numA * (maxC + 1));
+        
+                // 5. Update UI
+                updatePlotly(currentPovm, maxN, maxC); // Update Heatmap
+                
+                // Update Experimental Plot: Indices (maxC + 1) to (2 * maxC + 1) are the model traces
+                let modelTraceIndices = Array.from({length: maxC + 1}, (_, i) => i + maxC + 1);
+                Plotly.restyle('data-plot-div', { y: modelYData }, modelTraceIndices);
+        
+                // Update Convergence Plot
                 Plotly.extendTraces('mse-plot-div', { x: [[currentIter]], y: [[mse]] }, [0]);
         
                 animationFrameId = requestAnimationFrame(() => {
