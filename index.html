@@ -137,7 +137,42 @@
             btnStart.textContent = "Start Reconstruction";
             btnStart.disabled = false;
         };
+        // Helper to calculate expected distribution: P = F * POVM
+        function calculateExpectedCounts(povm, alphas, maxN, maxC, numA) {
+            let expected = new Float64Array(numA * (maxC + 1));
+            
+            for (let i = 0; i < numA; i++) {
+                let mu = alphas[i] * alphas[i]; // Alpha squared
+                for (let c = 0; c <= maxC; c++) {
+                    let sum = 0;
+                    for (let n = 0; n <= maxN; n++) {
+                        // Poisson Prob * POVM element
+                        let p_n = (Math.exp(-mu) * Math.pow(mu, n)) / factorial(n);
+                        sum += p_n * povm[n * (maxC + 1) + c];
+                    }
+                    expected[i * (maxC + 1) + c] = sum;
+                }
+            }
+            return expected;
+        }
+        
+        // Simple factorial for the Poisson calculation
+        function factorial(n) {
+            if (n === 0) return 1;
+            let res = 1;
+            for (let i = 2; i <= n; i++) res *= i;
+            return res;
+        }
 
+        function initMSEPlot() {
+            Plotly.newPlot('mse-plot-div', [{
+                x: [], y: [], mode: 'lines', name: 'MSE', line: {color: 'red'}
+            }], {
+                title: 'Convergence (MSE)',
+                xaxis: { title: 'Iteration' },
+                yaxis: { title: 'Mean Squared Error', type: 'log' }
+            });
+        }
         // --- Plot Experimental Data with Error Bars ---
         function plotExperimentalData(alphas, counts, numA, maxC) {
             let traces = [];
@@ -352,6 +387,53 @@
 
         function runMCMC(totalIter, stepSize, maxN, maxC, numParams) {
             if (!isRunning) return;
+        
+            if (currentIter < totalIter) {
+                let stepsThisFrame = Math.min(stepSize, totalIter - currentIter);
+                
+                Module.ccall('bdt_step', 'number', ['number', 'number'], [stepsThisFrame, povmPtr]);
+                currentIter += stepsThisFrame;
+        
+                let currentPovm = new Float64Array(Module.HEAPF64.buffer, povmPtr, numParams);
+                
+                // 1. Update Heatmap
+                updatePlotly(currentPovm, maxN, maxC);
+        
+                // 2. Calculate Model and MSE
+                let expected = calculateExpectedCounts(currentPovm, parsedAlphas, maxN, maxC, parsedAlphas.length);
+                let mse = 0;
+                for(let i=0; i<expected.length; i++) {
+                    // Normalize expected to total counts if necessary
+                    let diff = expected[i] - (parsedCounts[i] / totalCountsPerAlpha); 
+                    mse += diff * diff;
+                }
+                mse /= expected.length;
+        
+                // 3. Update Experimental Plot (Adding 'Model' lines)
+                // We update the 'y' data of the traces assigned to the model
+                let modelYData = []; 
+                for(let c=0; c<=maxC; c++) {
+                    let traceY = [];
+                    for(let i=0; i<parsedAlphas.length; i++) traceY.push(expected[i * (maxC + 1) + c] * totalCountsPerAlpha);
+                    modelYData.push(traceY);
+                }
+                // Indices 0 to maxC are experimental, maxC+1 to 2*maxC+1 are model
+                let modelIndices = Array.from({length: maxC + 1}, (_, i) => i + maxC + 1);
+                Plotly.restyle('data-plot-div', { y: modelYData }, modelIndices);
+        
+                // 4. Update Convergence Plot
+                Plotly.extendTraces('mse-plot-div', { x: [[currentIter]], y: [[mse]] }, [0]);
+        
+                animationFrameId = requestAnimationFrame(() => {
+                    runMCMC(totalIter, stepSize, maxN, maxC, numParams);
+                });
+            } else {
+                finishMCMC();
+            }
+        }
+        
+        /*function runMCMC(totalIter, stepSize, maxN, maxC, numParams) {
+            if (!isRunning) return;
 
             if (currentIter < totalIter) {
                 let stepsThisFrame = Math.min(stepSize, totalIter - currentIter);
@@ -379,7 +461,7 @@
             } else {
                 finishMCMC();
             }
-        }
+        }*/
 
         function finishMCMC() {
             logMsg(`MCMC Complete! 100% finished.`);
