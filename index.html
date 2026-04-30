@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bayesian Detector Tomography (BDT) Reconstruction</title>
+    <title>Detector Tomography: Bayesian Inference </title>
     
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     
@@ -49,7 +49,7 @@
 </head>
 <body>
 
-    <h1>BDT POVM Reconstruction Interface</h1>
+    <h1>Detector Tomography: Bayesian Inference</h1>
 
     <div class="container">
         <div class="sidebar">
@@ -62,37 +62,39 @@
             <h3>2. Model Parameters</h3>
             <div class="form-row">
                 <div class="form-group">
-                    <label for="max-n">Max Photons (N)</label>
+                    <label for="max-n">Max input photons (N)</label>
                     <input type="number" id="max-n" value="15" min="1">
                 </div>
+                <!-->
                 <div class="form-group">
-                    <label for="max-c">Max Clicks (C)</label>
+                    <label for="max-c">Max PNR (C)</label>
                     <input type="number" id="max-c" value="5" min="1">
                 </div>
             </div>
             <div class="form-group">
-                <label for="num-alphas">Number of Alphas</label>
+                <label for="num-alphas">Number of probe states</label>
                 <input type="number" id="num-alphas" value="10" min="1">
             </div>
-
+            </!-->
+                
             <h3>3. MCMC Settings</h3>
             <div class="form-row">
                 <div class="form-group">
-                    <label for="total-iter">Total Iterations</label>
+                    <label for="total-iter">Max iterations</label>
                     <input type="number" id="total-iter" value="100000" min="1000">
                 </div>
                 <div class="form-group">
-                    <label for="step-size">Steps per Frame</label>
+                    <label for="step-size">Results update period (iterations)</label>
                     <input type="number" id="step-size" value="1000" min="1">
                 </div>
             </div>
             <div class="form-row">
                 <div class="form-group">
-                    <label for="sigma">Proposal Sigma</label>
+                    <label for="sigma">MCMC Proposal Sigma</label>
                     <input type="number" id="sigma" value="0.01" step="0.001">
                 </div>
                 <div class="form-group">
-                    <label for="seed">RNG Seed</label>
+                    <label for="seed">MCMC RNG Seed</label>
                     <input type="number" id="seed" value="1234">
                 </div>
             </div>
